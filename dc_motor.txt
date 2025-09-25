@@ -1,0 +1,51 @@
+// Pin configuration
+int IN1 = 6;   // L298N IN1
+int IN2 = 7;   // L298N IN2
+int TRIG_PIN = 10;
+int ECHO_PIN = 11;
+int LED_PIN = 12;
+int ENA = 10;  // L298N ENA (enable pin)
+
+void setup() {
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+
+  // Run motor forward at full speed
+  // digitalWrite(IN1, HIGH);
+  // digitalWrite(IN2, LOW);
+  // digitalWrite(ENA, HIGH); // Enable full speed
+}
+
+void loop() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Measure pulse from ECHO
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  float distance = duration / 58.0;  // distance in cm
+
+  if (distance < 10 && distance > 0) {
+    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+  } else if (distance < 25 && distance > 15) {
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+  } else {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    digitalWrite(LED_PIN, LOW);
+    
+  }
+
+
+  // Motor will keep running at full speed
+}
