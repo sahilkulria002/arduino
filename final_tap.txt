@@ -1,0 +1,66 @@
+#include <ESP32Servo.h>
+
+Servo myservo;
+
+#define TRIG_PIN 10
+#define ECHO_PIN 11
+#define LED_PIN 12
+#define servoPin 8
+
+int tap = 0; // Global variable to track tap state
+
+void setup() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.begin(115200); // Only one Serial.begin() needed
+  myservo.attach(servoPin);
+  myservo.write(0);
+  Serial.println("Servo initialized at 0°");
+}
+
+void loop() {
+  // Send 10 µs pulse on TRIG
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Measure pulse from ECHO
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  float distance = duration / 58.0;  // distance in cm
+
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Activate tap if object detected between 5-10 cm
+  if (distance < 10 && distance > 5) {
+    digitalWrite(LED_PIN, HIGH);
+    if (tap == 0) { // If tap is not active
+      // Move servo to turn on tap
+      for (int pos = 0; pos <= 90; pos += 10) {
+        myservo.write(pos);
+        Serial.print("Turning on tap - Position: ");
+        Serial.println(pos);
+        delay(100);
+      }
+      tap = 1; // Set tap as active
+    }
+  } else {
+    digitalWrite(LED_PIN, LOW);
+    if (tap == 1) { // If tap is active
+      // Move servo to turn off tap
+      for (int pos = 90; pos >= 0; pos -= 10) {
+        myservo.write(pos);
+        Serial.print("Turning off tap - Position: ");
+        Serial.println(pos);
+        delay(100);
+      }
+      tap = 0; // Set tap as inactive
+    }
+  }
+
+  delay(100); // small delay between readings
+}
