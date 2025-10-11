@@ -1,22 +1,28 @@
-#include <ESP32Servo.h>
+#include <Servo.h>
 
 Servo myservo;
 
-#define TRIG_PIN 10
-#define ECHO_PIN 11
+#define TRIG_PIN 7
+#define ECHO_PIN 6
 #define LED_PIN 12
 #define servoPin 8
 
 int tap = 0; // Global variable to track tap state
+int outOfRangeCount = 0; // Counter for consecutive out-of-range readings
+int inRangeCount = 0; // Counter for consecutive in-range readings
+int currentServoPos = 150; // Track current servo position
+const int THRESHOLD_COUNT = 10; // Number of consecutive out-of-range readings needed to turn off tap
+const int ON_THRESHOLD_COUNT = 4; // Number of consecutive in-range readings needed to turn on tap
 
 void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(LED_PIN, OUTPUT);
-  Serial.begin(115200); // Only one Serial.begin() needed
+  
+  Serial.begin(9600); // Uno’s default reliable baud rate
   myservo.attach(servoPin);
-  myservo.write(0);
-  Serial.println("Servo initialized at 0°");
+  myservo.write(150);
+  Serial.println("Servo initialized at 150°");
 }
 
 void loop() {
@@ -35,30 +41,85 @@ void loop() {
   Serial.print(distance);
   Serial.println(" cm");
 
-  // Activate tap if object detected between 5-10 cm
-  if (distance < 10 && distance > 5) {
-    digitalWrite(LED_PIN, HIGH);
-    if (tap == 0) { // If tap is not active
-      // Move servo to turn on tap
-      for (int pos = 0; pos <= 90; pos += 10) {
+  // Check if object detected between 5-15 cm
+  if (distance < 15 && distance > 5) {
+    outOfRangeCount = 0; // Reset out-of-range counter when object is detected
+    inRangeCount++; // Increment in-range counter
+    
+    Serial.print("In range count: ");
+    Serial.println(inRangeCount);
+    
+    // Only turn on tap after 4+ consecutive in-range readings
+    if (inRangeCount >= ON_THRESHOLD_COUNT && tap == 0) {
+      digitalWrite(LED_PIN, HIGH);
+      
+      // Move servo to turn on tap from current position
+      for (int pos = currentServoPos; pos >= 10; pos -= 10) {
         myservo.write(pos);
+        currentServoPos = pos; // Update current position
         Serial.print("Turning on tap - Position: ");
         Serial.println(pos);
         delay(100);
       }
       tap = 1; // Set tap as active
+      Serial.println("Tap turned ON after 4+ in-range readings");
+    } else if (tap == 1) {
+      // Tap is already on, keep LED on
+      digitalWrite(LED_PIN, HIGH);
     }
   } else {
-    digitalWrite(LED_PIN, LOW);
-    if (tap == 1) { // If tap is active
+    // Object not in range (outside 5-15 cm)
+    inRangeCount = 0; // Reset in-range counter when no object detected
+    outOfRangeCount++; // Increment counter for out-of-range readings
+    Serial.print("Out of range count: ");
+    Serial.println(outOfRangeCount);
+    
+    if (outOfRangeCount >= THRESHOLD_COUNT && tap == 1) {
+      // Only turn off tap after 10+ consecutive out-of-range readings
+      digitalWrite(LED_PIN, LOW);
+      
       // Move servo to turn off tap
-      for (int pos = 90; pos >= 0; pos -= 10) {
+      bool handDetectedDuringTurnOff = false;
+      for (int pos = 10; pos <= 150; pos += 10) {
         myservo.write(pos);
+        currentServoPos = pos; // Update current position
         Serial.print("Turning off tap - Position: ");
         Serial.println(pos);
         delay(100);
+
+        digitalWrite(TRIG_PIN, LOW);
+        delayMicroseconds(2);
+        digitalWrite(TRIG_PIN, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(TRIG_PIN, LOW);
+
+        // Measure pulse from ECHO
+        long duration = pulseIn(ECHO_PIN, HIGH);
+        float distance = duration / 58.0;  // distance in cm
+        if (distance < 15 && distance > 5) {
+            Serial.println("Hand detected during turn-off! Stopping turn-off process.");
+            digitalWrite(LED_PIN, HIGH);
+            outOfRangeCount = 0; // Reset counter
+            inRangeCount = ON_THRESHOLD_COUNT; // Set to threshold so tap stays on
+            handDetectedDuringTurnOff = true;
+            break;
+        }
       }
-      tap = 0; // Set tap as inactive
+      
+      // Only set tap as inactive if we completed the full turn-off without interruption
+      if (!handDetectedDuringTurnOff) {
+        tap = 0; // Set tap as inactive
+        currentServoPos = 150; // Update final position
+        outOfRangeCount = 0; // Reset counter after turning off
+        Serial.println("Tap turned OFF after 10+ out-of-range readings");
+      }
+    } else if (tap == 1) {
+      // Keep LED on if tap is still active (haven't reached threshold yet)
+      digitalWrite(LED_PIN, HIGH);
+      Serial.println("Tap remains ON (waiting for more out-of-range readings)");
+    } else {
+      // Tap is already off
+      digitalWrite(LED_PIN, LOW);
     }
   }
 

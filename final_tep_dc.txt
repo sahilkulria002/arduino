@@ -1,0 +1,104 @@
+// Timed open/close tap using L298 (no encoder)
+// Assumes: ENA = D9 PWM, IN1 = D8, IN2 = D7
+// IR sensor on pin 2 (active LOW when hand present)
+
+const int enA = 9; 
+const int in1 = 6;
+const int in2 = 7;
+const int led = 12;
+
+const int irPin = 8;       // IR sensor OUT (LOW = detected)
+const int openTimeMs = 1000;  // time needed to open tap (ms) - find experimentally
+const int closeTimeMs = 1000; // time needed to close (ms)
+const int runSpeed = 100;     // PWM 0-255 (tune as needed)
+
+void setup() {
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(led, OUTPUT);
+  pinMode(irPin, INPUT);
+  Serial.begin(9600);
+  stopMotor();
+}
+
+void loop() {
+  static int tapState = 0; // 0 closed, 1 opened
+  if (isDetectedStable()) {
+    // object present -> ensure tap open
+    if (tapState == 0) {
+      openTap();
+      tapState = 1;
+    }
+    digitalWrite(led, HIGH);
+  } else {
+    // no object -> ensure tap closed
+    if (tapState == 1) {
+      closeTap();
+      tapState = 0;
+    }
+    digitalWrite(led, LOW);
+  }
+  delay(100);
+}
+
+bool isDetectedStable() {
+  int count = 0;
+  for (int i = 0; i < 5; ++i) {
+    if (digitalRead(irPin) == 0) count++; // LOW = detected
+    delay(20);
+  }
+  return (count >= 3);
+}
+
+void setMotor(int speed) {
+  // speed >0 forward, <0 reverse, 0 stop
+  if (speed > 0) {
+    digitalWrite(in1, HIGH);
+    digitalWrite(in2, LOW);
+    analogWrite(enA, constrain(speed, 0, 255));
+  } else if (speed < 0) {
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, HIGH);
+    analogWrite(enA, constrain(-speed, 0, 255));
+  } else {
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, LOW);
+    analogWrite(enA, 0);
+  }
+}
+
+void rampToSpeed(int target, int steps=10, int stepDelay=200) {
+  // smooth acceleration to target pwm (0..255)
+  int current = 0;
+  // find current by reading analogWrite state not available; we ramp from 0
+  for (int i = 0; i <= steps; ++i) {
+    int s = (target * i) / steps;
+    analogWrite(enA, s);
+    delay(stepDelay);
+  }
+}
+
+void openTap() {
+  Serial.println("Opening tap");
+  rampToSpeed(runSpeed);
+  setMotor(runSpeed);
+  delay(openTimeMs); // time to rotate mechanism to open position (determine experimentally)
+  stopMotor();
+  Serial.println("Tap opened");
+}
+
+void closeTap() {
+  Serial.println("Closing tap");
+  rampToSpeed(-runSpeed);
+  setMotor(-runSpeed);
+  delay(closeTimeMs); // time to rotate mechanism to closed position
+  stopMotor();
+  Serial.println("Tap closed");
+}
+
+void stopMotor() {
+  analogWrite(enA, 0);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+}
