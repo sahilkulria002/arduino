@@ -1,127 +1,115 @@
-#include <Servo.h>
+// === Automatic Tap Control (slow + strong motor mode) ===
+// Hardware:
+//  - IR sensor OUT -> pin 8 (LOW when hand present)
+//  - L298N IN1 -> pin 6
+//  - L298N IN2 -> pin 7
+//  - L298N ENA -> pin 9 (PWM)
+//  - LED indicator -> pin 12
+//  - Motor power 12 V (shared GND with Arduino)
 
-Servo myservo;
+const int enA = 9;
+const int in1 = 6;
+const int in2 = 7;
+const int led = 12;
+#define TRIG_PIN 4
+#define ECHO_PIN 3
 
-#define TRIG_PIN 7
-#define ECHO_PIN 6
-#define LED_PIN 12
-#define servoPin 8
-
-int tap = 0; // Global variable to track tap state
-int outOfRangeCount = 0; // Counter for consecutive out-of-range readings
-int inRangeCount = 0; // Counter for consecutive in-range readings
-int currentServoPos = 150; // Track current servo position
-const int THRESHOLD_COUNT = 10; // Number of consecutive out-of-range readings needed to turn off tap
-const int ON_THRESHOLD_COUNT = 4; // Number of consecutive in-range readings needed to turn on tap
+const int openTimeMs = 600;   // how long motor should run to open tap
+const int closeTimeMs = 700;  // how long to close
+const int onTime = 300;        // motor ON duration (ms) per burst
+const int offTime = 70;        // motor OFF pause (ms) per burst
 
 void setup() {
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(led, OUTPUT);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  pinMode(LED_PIN, OUTPUT);
-  
-  Serial.begin(9600); // Uno’s default reliable baud rate
-  myservo.attach(servoPin);
-  myservo.write(150);
-  Serial.println("Servo initialized at 150°");
+  Serial.begin(9600);
+  stopMotor();
+  Serial.println("Automatic Tap Initialized");
 }
 
 void loop() {
-  // Send 10 µs pulse on TRIG
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  static int tapState = 0; // 0 = closed, 1 = open
 
-  // Measure pulse from ECHO
-  long duration = pulseIn(ECHO_PIN, HIGH);
-  float distance = duration / 58.0;  // distance in cm
 
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.println(" cm");
-
-  // Check if object detected between 5-15 cm
-  if (distance < 15 && distance > 5) {
-    outOfRangeCount = 0; // Reset out-of-range counter when object is detected
-    inRangeCount++; // Increment in-range counter
-    
-    Serial.print("In range count: ");
-    Serial.println(inRangeCount);
-    
-    // Only turn on tap after 4+ consecutive in-range readings
-    if (inRangeCount >= ON_THRESHOLD_COUNT && tap == 0) {
-      digitalWrite(LED_PIN, HIGH);
-      
-      // Move servo to turn on tap from current position
-      for (int pos = currentServoPos; pos >= 10; pos -= 10) {
-        myservo.write(pos);
-        currentServoPos = pos; // Update current position
-        Serial.print("Turning on tap - Position: ");
-        Serial.println(pos);
-        delay(100);
-      }
-      tap = 1; // Set tap as active
-      Serial.println("Tap turned ON after 4+ in-range readings");
-    } else if (tap == 1) {
-      // Tap is already on, keep LED on
-      digitalWrite(LED_PIN, HIGH);
+  if (isDetectedStable()) {
+    digitalWrite(led, HIGH);
+    if (tapState == 0) {
+      openTap();
+      tapState = 1;
     }
+    
   } else {
-    // Object not in range (outside 5-15 cm)
-    inRangeCount = 0; // Reset in-range counter when no object detected
-    outOfRangeCount++; // Increment counter for out-of-range readings
-    Serial.print("Out of range count: ");
-    Serial.println(outOfRangeCount);
-    
-    if (outOfRangeCount >= THRESHOLD_COUNT && tap == 1) {
-      // Only turn off tap after 10+ consecutive out-of-range readings
-      digitalWrite(LED_PIN, LOW);
-      
-      // Move servo to turn off tap
-      bool handDetectedDuringTurnOff = false;
-      for (int pos = 10; pos <= 150; pos += 10) {
-        myservo.write(pos);
-        currentServoPos = pos; // Update current position
-        Serial.print("Turning off tap - Position: ");
-        Serial.println(pos);
-        delay(100);
-
-        digitalWrite(TRIG_PIN, LOW);
-        delayMicroseconds(2);
-        digitalWrite(TRIG_PIN, HIGH);
-        delayMicroseconds(10);
-        digitalWrite(TRIG_PIN, LOW);
-
-        // Measure pulse from ECHO
-        long duration = pulseIn(ECHO_PIN, HIGH);
-        float distance = duration / 58.0;  // distance in cm
-        if (distance < 15 && distance > 5) {
-            Serial.println("Hand detected during turn-off! Stopping turn-off process.");
-            digitalWrite(LED_PIN, HIGH);
-            outOfRangeCount = 0; // Reset counter
-            inRangeCount = ON_THRESHOLD_COUNT; // Set to threshold so tap stays on
-            handDetectedDuringTurnOff = true;
-            break;
-        }
-      }
-      
-      // Only set tap as inactive if we completed the full turn-off without interruption
-      if (!handDetectedDuringTurnOff) {
-        tap = 0; // Set tap as inactive
-        currentServoPos = 150; // Update final position
-        outOfRangeCount = 0; // Reset counter after turning off
-        Serial.println("Tap turned OFF after 10+ out-of-range readings");
-      }
-    } else if (tap == 1) {
-      // Keep LED on if tap is still active (haven't reached threshold yet)
-      digitalWrite(LED_PIN, HIGH);
-      Serial.println("Tap remains ON (waiting for more out-of-range readings)");
-    } else {
-      // Tap is already off
-      digitalWrite(LED_PIN, LOW);
+    digitalWrite(led, LOW);
+    if (tapState == 1) {
+      closeTap();
+      tapState = 0;
     }
+
   }
 
-  delay(100); // small delay between readings
+  delay(100);
+}
+
+// --- Smooth, full-power slow movement ---
+void slowStrongMove(int direction, int durationMs) {
+  unsigned long start = millis();
+  while (millis() - start < durationMs) {
+    if (direction > 0) {         // Forward
+      digitalWrite(in1, HIGH);
+      digitalWrite(in2, LOW);
+    } else {                     // Reverse
+      digitalWrite(in1, LOW);
+      digitalWrite(in2, HIGH);
+    }
+    analogWrite(enA, 250);       // full torque
+    delay(onTime);               // short pulse
+    analogWrite(enA, 0);         // pause
+    delay(offTime);
+  }
+  stopMotor();
+}
+
+// --- Tap actions ---
+void openTap() {
+  Serial.println("Opening tap...");
+  slowStrongMove(1, openTimeMs);
+  Serial.println("Tap opened.");
+}
+
+void closeTap() {
+  Serial.println("Closing tap...");
+  slowStrongMove(-1, closeTimeMs);
+  Serial.println("Tap closed.");
+}
+
+void stopMotor() {
+  analogWrite(enA, 0);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+}
+
+// --- IR filtering for reliable detection ---
+bool isDetectedStable() {
+  int count = 0;
+  for (int i = 0; i < 5; ++i) {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+
+    // Measure pulse from ECHO
+    long duration = pulseIn(ECHO_PIN, HIGH);
+    float distance = duration / 58.0;  // distance in cm
+    Serial.print("Distance: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+    if (distance >=3 && distance <= 18 ) count++;
+    delay(50);
+  }
+  return (count >= 3);
 }
